@@ -1,0 +1,4 @@
+results/**
+consensus/**
+.nextflow*
+work/**
