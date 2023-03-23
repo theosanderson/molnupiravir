@@ -1,0 +1,5 @@
+agile_seqs/
+seqs/
+work/
+.nextflow*
+results/
