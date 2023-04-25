@@ -1,0 +1,115 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+
+a=read_csv("./molnupiravir_rescaled_samples.csv") %>% mutate(trial = "2", treat="mov", contexts_only=F)
+b = read_csv("./MOV_rescaled_contexts_only.csv") %>% mutate(trial = "2", treat="mov", contexts_only=T)
+c = read_csv("./naive_rescaled_contexts_only.csv") %>% mutate(trial = "2", treat="naive", contexts_only=T)
+d = read_csv("./naive_rescaled_samples.csv") %>% mutate(trial = "2", treat="naive", contexts_only=F)
+e = read_csv("./agile_placebo_spectrum.csv") %>% mutate(trial = "1", treat="naive", contexts_only=F)
+f = read_csv("./agile_molnupiravir_spectrum.csv") %>% mutate(trial = "1", treat="mov", contexts_only=F)
+
+
+
+combo = bind_rows(a,b,c,d,e,f)%>% filter(!contexts_only) %>% separate(Substitution, into=c("context_before","par","mut","context_after"),sep="[\\[\\]>]") 
+
+data <- combo %>%   mutate(mutation_type = factor(paste0(par, ">", mut), 
+                           levels = c("C>A", "C>G", "C>T", "T>A", "T>C", "T>G", "G>T", "G>C", "G>A", "A>T", "A>G", "A>C")))
+
+totals = data %>% group_by(trial) %>% summarise(total = sum(Number_of_mutations))
+totals
+
+normed = data %>% inner_join(totals) %>% mutate(Number_of_mutations=Number_of_mutations/total)
+
+merged = normed %>% group_by(context_before,context_after,par,mut,treat, mutation_type) %>% summarise(Number_of_mutations=mean(Number_of_mutations))
+
+
+ggplot(merged,aes(x=paste(context_before,context_after,par,mut),y=Number_of_mutations)) + facet_wrap(~paste(treat)) + geom_col()
+
+
+
+```
+
+```{r}
+
+library(extrafont)
+
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+loadfonts()
+```
+
+```{r}
+plot_spectrum = function(data,globalmax){
+  
+my_levels = sort(unique(paste0(data$context_before,data$context_after)))
+
+data$level = factor(paste0(data$context_before,data$context_after), levels=my_levels)
+data$levelno=as.numeric(data$level)
+
+precedings = data %>% group_by(mutation_type, context_before) %>% summarise(levelno=mean(levelno))
+
+
+p = ggplot(data,aes(x=levelno, y=`Number_of_mutations`,fill=mutation_type)) +facet_wrap(~mutation_type,nrow=1, strip.position = "top") +theme_bw() +geom_col() +theme(panel.spacing = unit(0, "lines") , panel.border = element_blank()) + geom_bar(stat="identity")+ geom_text(aes(x=levelno,y=-0.03*1.3*globalmax,label=context_after,color=context_after),size=.8,fontface="bold",family="Arial Narrow")+
+  geom_text(data=precedings, aes(x=levelno,y=-0.14*1.1*globalmax,label=context_before,color=context_before ),size=3.25*0.7) +  theme( # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           # explicitly set the horizontal lines (or they will disappear too)
+           panel.grid.major.y = element_line( size=.2, color="black" ) 
+    )  +theme(legend.position="none")+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) + scale_x_continuous( expand = c(0, 0))  #+scale_color_manual(values=c("A"="darkred","C"="darkgreen","G"="darkorange","T"="darkblue"))
+print(p)
+return(p)
+}
+
+
+
+
+
+```
+
+
+```{r}
+
+
+plot_spectra = function(data, facet_var) {
+  
+  
+  # Get unique values of the facet_var
+  unique_values <- unique(data[[facet_var]])
+  
+  # Create an empty list to store individual plots
+  plots <- list()
+  
+  # Loop through unique values and create a plot for each
+  for (value in unique_values) {
+    filtered_data <- data %>% filter(!!sym(facet_var) == value)
+    p <- plot_spectrum(filtered_data, 0.2*max(data$Number_of_mutations))
+    p <- p + ggtitle(paste("Treatment:", value)) + coord_cartesian(ylim=c(0,max(data$Number_of_mutations)),clip="off" ) + labs(y="Relative mutational load")+
+  theme(plot.title = element_text(hjust = 0.5))
+    plots[[value]] <- p
+  }
+  
+  # Combine individual plots using patchwork
+  combined_plot <- wrap_plots(rev(plots), ncol = 2)
+  
+  return(combined_plot)
+}
+
+# Example usage
+
+
+write_tsv(merged,"merged_spectra.tsv")
+
+
+g <- plot_spectra(merged, "treat")
+g
+ggsave("test.pdf",width=8, height=4)
+
+```
