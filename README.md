@@ -10,5 +10,7 @@ Data and scripts used in "Identification of a molnupiravir-associated mutational
 * R notebook producing all figures and analyses in the paper
 ## archive
 Older scripts
+## bte
+Used to extract data from MAT for subsequent processing
 ## open_data_version
 A version of the analysis using open data from INSDC for reproducibility
