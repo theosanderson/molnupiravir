@@ -14,3 +14,7 @@ Older scripts
 Used to extract data from MAT for subsequent processing
 ## open_data_version
 A version of the analysis using open data from INSDC for reproducibility
+
+_______________
+
+Exact package versions for the R environment we used are [here](https://github.com/theosanderson/molnupiravir/blob/main/archive/package_versions.txt). Our work was carried out on macOS 13.0
