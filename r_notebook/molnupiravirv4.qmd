@@ -1,0 +1,1622 @@
+---
+title: "Analysis and figure plotting for molnupiravir analysis"
+format: pdf
+execute:
+  cache: false
+---
+
+# Analysis of data from mutation annotated tree
+
+```{r cache.lazy=FALSE}
+CtoTthreshold = 0.2
+GtoAthreshold = 0.25
+transitionthreshold = 0.9
+
+
+red <- "#e31919"
+blue1 <- "#5450f2"
+threshold_branch_length <- 10
+library(Biostrings)
+library(tidyverse)
+data_nodes <- read_tsv("~/Dropbox/new_mov2/all_nodes.tsv.gz")
+data_nodes <- data_nodes %>% mutate(total_muts = `A>C` + `A>G` + `A>T` + `C>A` + `C>G` + `C>T` + `G>A` + `G>C` + `G>T` + `T>A` + `T>C` + `T>G`, transitions = `G>A` + `A>G` + `C>T` + `T>C`, transversions = total_muts - transitions, flagged = (((`G>A` / total_muts) > GtoAthreshold & (`C>T` / total_muts) > CtoTthreshold & transitions / total_muts > transitionthreshold)))
+
+
+
+data_muts <- read_tsv("~/Dropbox/new_mov2/all_node_muts.tsv.gz")
+parenthood <- read_tsv("~/Dropbox/new_mov2/parenthood.tsv.gz")
+
+
+find_children <- function(parenthood, parent) {
+  # Find the immediate children of the parent
+  children <- parenthood$child[parenthood$parent == parent]
+
+  # Initialize a vector to store all descendants
+  all_descendants <- c()
+
+  # Loop through each child and find their descendants
+  for (child in children) {
+    # Add the child to the list of descendants
+    all_descendants <- c(all_descendants, child)
+
+    # Recursively find the descendants of the child
+    child_descendants <- find_children(parenthood, child)
+
+    # Add the descendants of the child to the list of all descendants
+    all_descendants <- c(all_descendants, child_descendants)
+  }
+
+  return(all_descendants)
+}
+
+get_parent <- function(parenthood, node) {
+  # Find the parent of the node
+  parent <- parenthood$parent[parenthood$child == node]
+
+  # If there is no parent (i.e., the node is the root), return NULL
+  if (length(parent) == 0) {
+    return(NULL)
+  }
+
+  return(parent)
+}
+
+data_muts <- data_muts %>% filter(gene != "ORF1a")
+```
+
+```{r}
+library(tidyverse)
+library(cowplot)
+data2 <- read_tsv("~/Dropbox/metadata_2023-04-29_01-16.tsv.gz", col_select = c("date", "country"))
+```
+
+```{r}
+data3 <- data2 %>%
+  select(date, country) %>%
+  extract(date, "(\\d{4})", into = "year")
+countries_totals <- data3 %>%
+  group_by(year, country) %>%
+  tally() %>%
+  mutate(total_genomes = n)
+
+countries_totals
+```
+
+```{r}
+library(ggrepel)
+
+tallied_big <- data_nodes %>%
+  dplyr::rename(country = consensus_country, year = consensus_year) %>%
+  filter(flagged, total_muts >= threshold_branch_length) %>%
+  group_by(country, year) %>%
+  tally() %>%
+  dplyr::rename(ga_branches = n) %>%
+  full_join(countries_totals) %>%
+  replace_na(list("ga_branches" = 0))
+
+tallied <- tallied_big %>% filter(year == "2022")
+
+
+# Define approved and not_approved countries
+approved <- c(
+  "USA", "United Kingdom", "Germany", "Denmark", "Japan", "India", "Australia", "Israel", "Brazil", "Italy", "Slovakia",
+  "Russia", "South Korea", "New Zealand", "Belgium", "Mauritius", "Vietnam", "Thailand", "Czech Republic", "Mexico", "Poland", "Spain", "Austria"
+)
+not_approved <- c(
+  "France", "Canada", "Sweden", "Netherlands", "Finland", "Switzerland", "Norway", "Ireland"
+)
+
+# Define usage
+usage <- c(
+  "Australia" = "\n(100 per 10k)",
+  "United Kingdom" = "\n(5 per 10k)",
+  "Japan" = "(50 per 10k)",
+  "Italy" = "\n(10 per 10k)"
+)
+
+# List of years
+years <- c("2020", "2021", "2022", "2023")
+lightpurple <- "#c39ecd"
+darkpurple <- "#77488c"
+darkorange <- "#fe670a"
+lightorange <- "#f1ae85"
+midorange <- "#ff883c"
+year_pal <- c(lightpurple, darkpurple, darkorange, lightorange)
+names(year_pal) <- years
+
+
+
+# Loop through each year
+for (i in 0:length(years)) {
+  # Subset data
+  data_subset <- data_nodes %>%
+    filter(total_muts > 20, consensus_year %in% years[0:i])
+
+  # Define plot
+  scatter <- ggplot(data_subset, aes(x = `G>A` / total_muts, y = transitions / total_muts, color = consensus_year, label = node_id)) +
+    geom_point() +
+    theme_bw() +
+    labs(x = "G\u00adto\u00adA proportion", y = "Transition proportion", color = "Year") +
+    scale_color_manual(values = year_pal) +
+    theme(legend.position = "bottom") +
+    scale_x_continuous(label = scales::percent) +
+    scale_y_continuous(label = scales::percent) +
+    coord_cartesian(xlim = c(0, 0.65), ylim = c(0, 1))
+
+  # Save plot
+  ggsave(paste0("big_scatter_big_", paste(years[0:i], collapse = "_"), ".pdf"), plot = scatter, width = 6, height = 4.5)
+  ggsave(paste0("scatter_big_", paste(years[0:i], collapse = "_"), ".pdf"), plot = scatter, width = 6 * (3 / 4.5), height = 4.5 * (3 / 4.5))
+}
+
+
+scatter <- scatter +
+  annotate("rect", xmin = 0.25, xmax = 0.6, ymin = 0.6, ymax = 1.05, fill = NA, color = "#222222", linetype = 3)
+
+
+
+tallied$approved <- case_when(
+  tallied$country %in% approved ~ "Available",
+  tallied$country %in% not_approved ~ "Not available",
+  TRUE ~ "Not identified"
+)
+
+country_plot_data = tallied %>% filter(country != "?", total_genomes > 500, year == "2022") %>% mutate(usage = usage[country]) %>% mutate(usage = ifelse(is.na(usage), "", usage)) %>% mutate(approved = factor(as.character(approved), levels = c("Not available", "Available")))
+
+library(knitr)
+
+
+library(knitr)
+library(kableExtra)
+forlatex = country_plot_data %>% select(country, ga_branches,total_genomes) %>% arrange(-total_genomes) %>% ungroup() %>% filter(total_genomes>10e3) %>% arrange(-ga_branches)  %>% select(country, ga_branches,total_genomes) %>% mutate(ga_branches= scales::comma(ga_branches))%>% mutate(total_genomes= scales::comma(total_genomes))
+
+country_plot_data
+
+names(forlatex) <- c("Country", "High G-to-A branches in 2022", "Total genomes in 2022")
+
+
+latex_table <- kable(forlatex, "latex", booktabs = TRUE,  linesep = "" ,
+                     col.names = names(forlatex), 
+                     align = c('l', 'r', 'r')) 
+writeLines(latex_table, "~/movmanuscript2/Figures2/countrytable.tex")
+
+
+country_comp <- ggplot(
+  country_plot_data,
+  aes( # color = approved,
+    x = total_genomes, y = ifelse(ga_branches == 0, 0.8, ga_branches), label = country
+  )
+) +
+  geom_point(alpha = 1, color = midorange) +
+  scale_x_log10(labels = scales::comma) +
+  scale_y_log10() +
+  geom_text_repel(alpha = 0.8, max.overlaps = 7, force = 50, min.segment.length = 0, lineheight = .85, size = 3, color = "#333333") +
+  theme_bw() +
+  labs(x = "Total genomes submitted from 2022", y = "High G\u00adto\u00adA clusters\nidentified in 2022") +
+  theme(legend.position = "none") +
+  annotation_logticks()
+
+
+country_comp
+
+ggsave("country_scatter_big.pdf", width = 4, height = 3.5)
+
+country_comp + geom_point(aes(color = approved))
+
+recents <- data_nodes %>% filter(total_muts >= threshold_branch_length, consensus_year == "2022")
+
+recents$branch_type <- ifelse(recents$flagged, "High\nG\u00adto\u00adA", "Other")
+recents$branch_type <- fct_relevel(recents$branch_type, "Other")
+
+
+age_dataset <- recents %>% filter(consensus_country %in% c("USA"), total_muts > 0)
+#age_dataset <- age_dataset %>% filter(num_descendants==1)
+age <- ggplot(
+  age_dataset,
+  aes(x = branch_type, y = as.numeric(age), fill = branch_type)
+) +
+  geom_violin(alpha = 0.7) +
+  # geom_jitter(height=0) +
+  theme_bw() +
+  geom_boxplot(alpha = 0.8, width = 0.15, fill = "white") +
+  labs(x = "Branch type", y = "Age") +
+  scale_fill_manual(values = c("High\nG\u00adto\u00adA" = "#e31919", "Other" = "#5450f2")) +
+  theme(legend.position = "none")
+age
+t.test(as.numeric(age) ~ branch_type, data = age_dataset)
+
+
+ggsave("age_violins.pdf", width = 3, height = 3)
+
+set.seed(339)
+availability_dataset <- tallied %>%
+  filter(country != "?", total_genomes > 50000) %>%
+  mutate(usage = usage[country]) %>%
+  mutate(usage = ifelse(is.na(usage), "", usage)) %>%
+  mutate(approved = factor(as.character(approved), levels = c("Not available", "Available")))
+availability_plot <- ggplot(availability_dataset, aes(color = approved, x = approved, y = (ga_branches + 0.5) / total_genomes, label = gsub(" ", " ", paste(country, usage)))) +
+  geom_point(alpha = 0.7) +
+  scale_y_log10() +
+  geom_text_repel(
+    alpha = 0.8, force = 10, min.segment.length = 0, lineheight = .65, size = 2.5, color = "#333333",
+    # do not pull text toward the point at (0,0)
+    max.time = 3,
+    segment.square = TRUE,
+    segment.size = 0.2,
+    segment.curvature = 0.3,
+    max.iter = 1e7, nudge_x = 0.5,
+    max.overlaps = Inf,
+    hjust = 0
+  ) +
+  theme_bw() +
+  labs(x = "Molnupiravir availability", color = "Molnupiravir", y = "High G\u00adto\u00adA clusters\nnormalised to total genomes") +
+  scale_color_manual(values = c("Not identified" = "gray", "Available" = darkorange, "Not available" = darkpurple)) +
+  theme(legend.position = "none") +
+  annotation_logticks(sides = "l") +
+  scale_x_discrete(
+    expand = expansion(mult = c(0.5, 1.15))
+  )
+availability_plot <- availability_plot +
+  scale_y_log10(labels = function(x) {
+    expression_strs <- sapply(x, function(x_val) {
+      if(is.na(x_val)){
+        return(NA)
+      }
+      if (x_val == 0) {
+        return("0")
+      }
+      log_val <- log10(x_val)
+      paste0("10^", log_val)
+    })
+    parse(text = expression_strs)
+  })
+
+availability_plot
+
+t.test(log10(ga_branches + 0.5) / total_genomes ~ approved, data = availability_dataset)
+ggsave("availability.pdf", width = 3.5, height = 3.5)
+
+by_year <- data_nodes %>%
+  filter(flagged, total_muts >= threshold_branch_length) %>%
+  group_by(consensus_year) %>%
+  tally()
+
+by_year_plot <- ggplot(by_year %>% filter(consensus_year %in% c("2021", "2022", "2020")), aes(x = consensus_year, y = n, fill = consensus_year)) +
+  geom_col() +
+  theme_bw() +
+  labs(x = "Year", y = "\nHigh G\u00adto\u00adA branches") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_fill_manual(values = c(darkpurple, darkpurple, midorange)) +
+  theme(legend.position = "none")
+by_year_plot
+
+ggsave("byyearplot.pdf", width = 2, height = 3)
+```
+We also display data on timecourse where we normalise for total genome numbers, use a non log axis.
+```{r fig.width=6}
+tallied_big <- tallied_big %>% mutate(p = (ga_branches) / total_genomes)
+
+ggplot(tallied_big %>% filter(country %in% c("Australia", "United Kingdom", "USA", "Japan", "South Korea", "Germany")) %>% filter(year != "2023", year != "?"), aes(x = year, y = p, color = country, group = country)) +
+  geom_line() +
+  geom_point() +
+  theme_bw() +
+  facet_wrap(~country, scales = "free") +
+  theme(legend.position = "none") +
+  labs(y = "Number of high G-to-A branches normalised to total genomes", x = "Year")
+
+ggsave("~/movmanuscript2/Figures2/supp-countries_timeline.pdf", width = 7.5, height = 4.5)
+
+
+ggplot(tallied_big %>% filter(country %in% c("Australia", "United Kingdom", "USA", "Japan", "South Korea", "Germany"),year!="?" ) , aes(x = year, y = p, color = country, group = country)) +
+  geom_line() +
+  geom_point() +
+  theme_bw() +
+  facet_wrap(~country, scales = "free") +
+  theme(legend.position = "none") +
+  labs(y = "Number of high G-to-A branches normalised to total genomes", x = "Year")
+
+```
+
+## Processing and analysis of existing genomic datasets
+
+```{r}
+
+
+library(tidyverse)
+tidyverse_conflicts()
+
+nuc_genome_counts <- read_csv("./context_count.csv") %>% dplyr::rename(
+  par = residue, context_before = residue_before, context_after = residue_after,
+  genome_count = count
+)
+
+
+a <- read_csv("./molnupiravir_rescaled_samples.csv") %>% mutate(trial = "2", treat = "mov", contexts_only = F)
+b <- read_csv("./MOV_rescaled_contexts_only.csv") %>% mutate(trial = "2", treat = "mov", contexts_only = T)
+c <- read_csv("./naive_rescaled_contexts_only.csv") %>% mutate(trial = "2", treat = "naive", contexts_only = T)
+d <- read_csv("./naive_rescaled_samples.csv") %>% mutate(trial = "2", treat = "naive", contexts_only = F)
+e <- read_csv("./agile_placebo_spectrum.csv") %>% mutate(trial = "1", treat = "naive", contexts_only = F)
+f <- read_csv("./agile_molnupiravir_spectrum.csv") %>% mutate(trial = "1", treat = "mov", contexts_only = F)
+
+g <- read_csv("./BA.1_SBS_spectrum_Ruis.csv") %>% mutate(trial = "3", treat = "normal", contexts_only = F)
+
+long <- read_csv("./long_branch_spectrum_rescaled.csv") %>% mutate(trial = "4", treat = "long", contexts_only = F)
+
+
+
+
+
+specific <- read_csv("./molnupiravir_spectrum_specific.csv") %>% mutate(trial = "5", treat = "mov_specific", contexts_only = F)
+
+colors <- c("#3055a2", "#221f20", "#da4837", "#939598", "#3f8347", "#edb9c0", "#4a68af", "#828487", "#e48862", "#c7c8ca", "#2f653a", "#703086")
+my_levels <- c("C\u00adto\u00adA", "C\u00adto\u00adG", "C\u00adto\u00adT", "T\u00adto\u00adA", "T\u00adto\u00adC", "T\u00adto\u00adG", "G\u00adto\u00adT", "G\u00adto\u00adC", "G\u00adto\u00adA", "A\u00adto\u00adT", "A\u00adto\u00adG", "A\u00adto\u00adC")
+
+
+
+combo <- bind_rows(a, b, c, d, e, f, g, long, specific) %>%
+  filter(!contexts_only) %>%
+  separate(Substitution, into = c("context_before", "par", "mut", "context_after"), sep = "[\\[\\]>]")
+
+data <- combo %>% mutate(mutation_type = factor(paste0(par, "\u00adto\u00ad", mut),
+  levels = my_levels
+))
+```
+For convenience to get the total number of each type of mutation we reverse MutTui's normalisations of context numbers.
+```{r}
+totals <- data %>%
+  group_by(trial) %>%
+  summarise(total = sum(Number_of_mutations))
+
+
+normed <- data %>%
+  inner_join(totals) %>%
+  mutate(Number_of_mutations = Number_of_mutations / total)
+
+multipled <- normed %>%
+  inner_join(nuc_genome_counts) %>%
+  mutate(Number_of_mutations = Number_of_mutations * genome_count)
+
+just_class <- multipled %>%
+  group_by(mutation_type, treat, trial) %>%
+  summarise(Number_of_mutations = sum(Number_of_mutations))
+```
+
+```{r}
+
+
+
+transversions <- c("A\u00adto\u00adC", "A\u00adto\u00adT", "C\u00adto\u00adA", "C\u00adto\u00adG", "G\u00adto\u00adC", "G\u00adto\u00adT", "T\u00adto\u00adA", "T\u00adto\u00adG")
+
+transitions <- c(
+  "A\u00adto\u00adG", "G\u00adto\u00adA",
+  "C\u00adto\u00adT",
+  "T\u00adto\u00adC"
+)
+
+
+just_class <- just_class %>%
+  mutate(mutation_type = fct_relevel(mutation_type,
+    c(transversions, transitions),
+    after = Inf
+  ))
+```
+
+```{r fig.width=5}
+ggplot(just_class %>% filter() %>% arrange(mutation_type), aes(y = Number_of_mutations, x = mutation_type, fill = treat)) +
+  geom_col(position = "dodge") +
+  facet_grid(. ~ trial) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  geom_vline(xintercept = 8.5, linetype = "dashed", color = "black")
+```
+
+```{r}
+# Directory where your TSV files are
+dir <- "./tsv_files"
+
+# List all .tsv files in the directory
+files <- list.files(path = dir, pattern = "\\.tsv$", full.names = TRUE)
+
+# Read all files into a list of tibbles, adding the file name as a new column
+big_df <- map_dfr(files, ~ read_tsv(.x, col_names = c("index", "par", "A", "C", "G", "T")) %>% mutate(file_name = basename(.x)))
+
+big_df <- big_df %>% mutate(total_depth = A + C + G + T)
+
+big_df <- big_df %>% separate(file_name, into = c("treat", "patient", "timepoint"), sep = "_")
+
+long_df <- big_df %>%
+  pivot_longer(
+    cols = c(A, C, G, T),
+    names_to = "base",
+    values_to = "count"
+  ) %>%
+  filter(par != base, count > 0) %>%
+  filter(count >= total_depth * 0.05, total_depth >= 100) %>%
+  mutate(mutation_type = as.factor(paste0(par, "\u00adto\u00ad", base))) %>%
+  filter(par != "N") %>%
+  group_by(patient, index, par, base) %>%
+  filter(row_number() == 1) # ensures we only count each mutation once
+
+
+
+burdens <- long_df %>%
+  filter(treat != "PAXLOVID") %>%
+  group_by(treat, patient) %>%
+  tally()
+
+# Split mutation counts into two vectors based on treatment
+naive_burden <- burdens %>%
+  filter(treat == "NAIVE") %>%
+  pull(n)
+mov_burden <- burdens %>%
+  filter(treat == "MOLNUPIRAVIR") %>%
+  pull(n)
+
+length(naive_burden)
+sd(naive_burden)
+mean(naive_burden)
+
+length(mov_burden)
+sd(mov_burden)
+mean(mov_burden)
+
+
+n_patients_naive <- 5
+n_patients_mov <- 8
+
+ba1_basic <- just_class %>% filter(trial == 3)
+ba1_normed <- ba1_basic %>% mutate(Number_of_mutations = Number_of_mutations * sum(naive_burden) / sum(ba1_basic$Number_of_mutations))
+```
+
+```{r}
+
+lookup <- c("MOLNUPIRAVIR" = "mov", "NAIVE" = "normal")
+
+mov_dataset <- long_df %>%
+  group_by(mutation_type, treat) %>%
+  tally() %>%
+  filter(treat == "MOLNUPIRAVIR") %>%
+  mutate(treat = "mov") %>%
+  mutate(Number_of_mutations = n) %>%
+  mutate(mutation_type = fct_relevel(mutation_type, c(transversions, transitions))) %>%
+  mutate(Number_of_mutations = Number_of_mutations / n_patients_mov)
+naive_dataset <- ba1_normed %>%
+  mutate(treat = "normal") %>%
+  mutate(mutation_type = fct_relevel(mutation_type, c(transversions, transitions))) %>%
+  mutate(Number_of_mutations = Number_of_mutations / n_patients_naive)
+
+
+
+relevant_dataset <- bind_rows(mov_dataset, naive_dataset)
+
+relevant_dataset
+a <- ggplot(relevant_dataset, aes(y = Number_of_mutations, x = mutation_type, fill = treat %>% fct_relevel(c("normal", "mov")))) +
+  geom_col(position = "dodge") +
+  geom_vline(xintercept = 8.5, linetype = "dashed", color = "black") +
+  scale_fill_manual(values = c(blue1, red), labels = c("BA.1 baseline\n(scaled to naive)", "Molnupiravir-\ntreated")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(fill = "") +
+  annotate("text", x = 5, y = 39, label = "Transversions", size = 3) +
+  labs(x = "Mutation type", y = "Relative number\nof substitutions") +
+  annotate("text", x = 10.5, y = 39, label = "Transitions", size = 3) +
+  theme(
+    legend.position = "bottom",
+    legend.justification = c(0, 1),
+    legend.margin = margin(t = 0, r = 0, b = 0, l = -45, unit = "pt")
+  )
+a
+
+
+naive_props <- naive_dataset %>%
+  ungroup() %>%
+  mutate(p = Number_of_mutations / sum(Number_of_mutations))
+# The BA.1 spectrum props is based on so many mutations (hundreds of thousands) that we can neglect its contribution to bootstraps
+
+naive_props
+mov_for_props <- long_df %>%
+  filter(treat == "MOLNUPIRAVIR") %>%
+  ungroup()
+
+resample_and_calc_ratios <- function(long_df) {
+  resampled <- sample_n(mov_for_props, size = nrow(mov_for_props), replace = TRUE)
+  props <- resampled %>%
+    group_by(mutation_type) %>%
+    tally() %>%
+    mutate(p = n / sum(n))
+  together <- inner_join(props, naive_props, by = "mutation_type") %>% mutate(ratio = p.x / p.y)
+  return(together %>% select(mutation_type, ratio))
+}
+
+bootstrap_count <- 100
+bootstrap_ratios <- list()
+
+for (i in 1:bootstrap_count) {
+  bootstrap_ratios[[i]] <- resample_and_calc_ratios(long_df)
+}
+
+# Convert list to data frame
+bootstrap_ratios_df <- bind_rows(bootstrap_ratios)
+bootstrap_ratios_df
+proportions_wider <- bootstrap_ratios_df %>%
+  group_by(mutation_type) %>%
+  summarise(sd = sd(ratio), ratio = mean(ratio))
+
+
+
+b <- ggplot(proportions_wider %>% mutate(mutation_type = fct_relevel(mutation_type, c(transversions, transitions))), aes(x = mutation_type, y = ratio, ymax = ratio + 2 * sd, ymin = pmax(ratio - 2 * sd, 0))) +
+  geom_col(position = "dodge", fill = "#9C3586") +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(x = "Mutation type", y = "Ratio of class proportions   \n(Molnupiravir vs. BA.1)") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black") +
+  geom_errorbar(alpha = 0.25, width = 0.4) +
+  coord_cartesian(ylim = c(0, 4))
+
+b
+proportions
+library(patchwork)
+
+ab <- a + b + plot_annotation(tag_levels = "A")
+ab
+
+ggsave("a.pdf", a, width = 3, height = 3.5)
+ggsave("b.pdf", b, width = 3, height = 3.5)
+
+
+mov_props <- mov_for_props %>%
+  group_by(mutation_type) %>%
+  tally() %>%
+  mutate(p = n / sum(n))
+
+
+perform_sim <- function(n_sample, relevant_props) {
+  # Set the number of iterations and the sample size
+  n_iterations <- 10000
+  15
+
+  # Initialize a vector to hold the result of each iteration
+  result <- vector(mode = "logical", length = n_iterations)
+
+
+  # Run the simulation
+  for (i in 1:n_iterations) {
+    # Sample mutation types according to their probabilities
+    sample_mutation <- sample(relevant_props$mutation_type, size = n_sample, replace = TRUE, prob = relevant_props$p)
+
+    # Calculate the proportions of each mutation type in the sample
+    sample_prop <- table(sample_mutation) / n_sample
+
+    # Calculate the transition proportion
+    transition_prop <- sum(sample_prop[c("C\u00adto\u00adT", "G\u00adto\u00adA", "T\u00adto\u00adC", "A\u00adto\u00adG")])
+
+    # Check whether the proportions meet the thresholds
+    result[i] <- (sample_prop["C\u00adto\u00adT"] > CtoTthreshold & sample_prop["G\u00adto\u00adA"] > GtoAthreshold & transition_prop > transitionthreshold)
+  }
+
+  # Calculate the proportion of iterations that meet the condition
+  proportion <- sum(result) / n_iterations
+  proportion
+  return(proportion)
+}
+# Define the mutation counts to consider
+mutations <- c(10,11,12,13,14, 15, 20)
+
+# Initialize vectors to hold results
+sensitivity <- numeric(length(mutations))
+specificity <- numeric(length(mutations))
+
+# Loop over each mutation count
+for (i in seq_along(mutations)) {
+  # Compute sensitivity and specificity
+  sensitivity[i] <- perform_sim(mutations[i], mov_props)
+  specificity[i] <- 1 - perform_sim(mutations[i], naive_props)
+}
+
+# Create a data frame with the results
+results <- data.frame(
+  Mutations = mutations,
+  Sensitivity = sensitivity,
+  Specificity = specificity
+)
+
+# Print the results
+print(results)
+```
+
+```{r fig.height=4,fig.width=2.5}
+library(ggpmisc)
+library(ggtext)
+
+normed
+
+trial2 <- normed %>%
+  filter((treat == "mov" & trial == "2")) %>%
+  group_by(mutation_type) %>%
+  mutate(Number_of_mutations = Number_of_mutations / sum(Number_of_mutations))
+trial1 <- normed %>%
+  filter((treat == "mov" & trial == "1")) %>%
+  group_by(mutation_type) %>%
+  mutate(Number_of_mutations = Number_of_mutations / sum(Number_of_mutations))
+long <- normed %>%
+  filter((trial == "4")) %>%
+  select(-treat, -total, -contexts_only, -trial) %>%
+  group_by(mutation_type) %>%
+  mutate(Number_of_mutations = Number_of_mutations / sum(Number_of_mutations))
+normal <- normed %>%
+  filter((trial == "3")) %>%
+  select(-treat, -total, -contexts_only, -trial) %>%
+  group_by(mutation_type) %>%
+  mutate(Number_of_mutations = Number_of_mutations / sum(Number_of_mutations))
+normal
+
+merged <- normed %>%
+  group_by(context_before, context_after, par, mut, treat, mutation_type) %>%
+  summarise(Number_of_mutations = mean(Number_of_mutations)) %>%
+  filter(treat == "mov")
+
+
+```
+
+```{r}
+
+long_v_merged <- inner_join(long %>% rename(v1 = Number_of_mutations), merged %>% rename(v2 = Number_of_mutations))
+```
+
+```{r}
+t1_v_merged <- inner_join(long %>% rename(v1 = Number_of_mutations), trial1 %>% rename(v2 = Number_of_mutations)) %>% mutate(context_full = paste0(context_before, par, context_after))
+```
+
+```{r}
+t2_v_merged <- inner_join(long %>% rename(v1 = Number_of_mutations), trial2 %>% rename(v2 = Number_of_mutations)) %>% mutate(context_full = paste0(context_before, par, context_after))
+```
+
+```{r}
+
+
+cosine_similarity_compute_fun <- function(data, ...) {
+  force(data)
+  
+  x <- data$x
+  y <- data$y
+  
+  similarity <- sum(x * y) / (sqrt(sum(x^2)) * sqrt(sum(y^2)))
+  
+ 
+  data.frame(x = 0, y = .11, label =paste0("c=",round(similarity, 3) ),color="black",hjust=0)
+}
+
+StatCosineSimilarity <- ggproto(
+  "StatCosineSimilarity",
+  Stat,
+  compute_group = cosine_similarity_compute_fun,
+  required_aes = c("x", "y")
+)
+
+stat_cosine_similarity <- function(mapping = NULL, data = NULL, geom = "text",
+                                   position = "identity", na.rm = FALSE, show.legend = NA, 
+                                   inherit.aes = TRUE, ...) {
+  layer(
+    stat = StatCosineSimilarity, data = data, mapping = mapping, geom = geom, 
+    position = position, show.legend = show.legend, inherit.aes = inherit.aes,
+    params = list(na.rm = na.rm, ...)
+  )
+}
+
+
+long_v_normal <- inner_join(long %>% rename(v1 = Number_of_mutations), normal %>% rename(v2 = Number_of_mutations)) %>% mutate(context_full = paste0(context_before, par, context_after))
+
+
+
+
+
+
+oneset <- unique((t2_v_merged %>% filter(mutation_type %in% c("G\u00adto\u00adA")))$context_full)
+
+
+library(pals)
+colors_16 <- unname(c(alphabet()[26:26], alphabet()[9], alphabet()[2:7], alphabet()[11:15], alphabet()[17:18], alphabet()[20:20]))
+
+
+reverse_complement <- function(context) {
+  rev_nucleotide <- function(x) {
+    switch(x,
+      "A" = "T",
+      "T" = "A",
+      "C" = "G",
+      "G" = "C",
+      x
+    )
+  }
+  rev_context <- sapply(strsplit(context, "")[[1]], rev_nucleotide)
+  paste(rev(rev_context), collapse = "")
+}
+
+context_colors <- c()
+for (i in 1:length(oneset)) {
+  context <- oneset[i]
+  reverse_context <- reverse_complement(context)
+
+  if (!context %in% names(context_colors)) {
+    context_colors[context] <- colors_16[i]
+  }
+
+  if (!reverse_context %in% names(context_colors)) {
+    context_colors[reverse_context] <- colors_16[i]
+  }
+}
+
+
+scatters <- ggplot(t2_v_merged %>% filter(mutation_type %in% c("G\u00adto\u00adA", "C\u00adto\u00adT")) %>% mutate(label = context_full), aes(x = v2, y = v1, label = label, color = context_full, group=1)) +
+  geom_point() +
+  labs(x = "Alteri et al. molnupiravir proportion", y = "Long branch proportion") +
+  facet_wrap(~mutation_type, ncol = 2) +
+  theme_bw() + stat_cosine_similarity()+
+  coord_fixed(xlim = c(0, NA), ylim = c(0, NA)) +
+  geom_abline(
+    intercept = 0, slope = 1, # linetype = "black",
+    color = "darkgray"
+  ) +
+  geom_text_repel(alpha = 0.5, size = 2, max.overlaps = Inf, force = 10) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_color_manual(values = context_colors) +
+  theme(legend.position = "none")
+
+
+scatters
+```
+
+```{r}
+
+
+start <- trial2 %>%
+  mutate(context_full = paste0(context_before, par, context_after)) %>%
+  mutate(rc_context = sapply(context_full, reverse_complement))
+GtoA <- start %>% filter(mutation_type == "G\u00adto\u00adA")
+CtoT <- start %>% filter(mutation_type == "C\u00adto\u00adT")
+joint <- inner_join(GtoA, CtoT, by = c("context_full" = "rc_context"))
+
+comp <- ggplot(joint, aes(x = Number_of_mutations.x, y = Number_of_mutations.y, label = paste0(context_full, "/", rc_context))) +
+  geom_point(color = "darkblue") +
+  theme_bw() +
+  geom_abline(
+    intercept = 0, slope = 1, # linetype = "black",
+    color = "darkgray"
+  ) + stat_cosine_similarity() + 
+  geom_text_repel(color = "darkgray") +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Context proportion for G-to-A", y = "Context proportion for C-to-T")
+
+comp
+```
+
+```{r fig.height=8,fig.width=8}
+
+
+
+names(colors) <- my_levels
+
+other_colors <- c("A" = "#111111", "C" = "#555555", "G" = "#999999", "T" = "#cccccc")
+all_colors <- c(colors, other_colors)
+
+colors_new <- all_colors
+colors_new["A\u00adto\u00adG"] <- "#5c4987"
+colors_new["T\u00adto\u00adC"] <- "#5377ad"
+
+create_scatter_plot <- function(df, x_label, file_name) {
+  plot <- ggplot(df %>%
+    filter(mutation_type %in% c("G\u00adto\u00adA", "C\u00adto\u00adT", "A\u00adto\u00adG", "T\u00adto\u00adC")) %>%
+    mutate(label = context_full), aes(x = v2, y = v1, label = label, color = mutation_type)) +
+    geom_point() +
+    labs(x = x_label, y = "Long branch proportion") +
+    facet_wrap(~mutation_type, ncol = 2) +
+    theme_bw() +
+    stat_cosine_similarity() +
+    coord_fixed(xlim = c(0, NA), ylim = c(0, NA)) +
+    # geom_abline(intercept = 0, slope = 1, color = "darkgray")+
+    geom_text_repel(alpha = 0.5, size = 2, max.overlaps = Inf, force = 10) +
+    scale_x_continuous(labels = scales::percent) +
+    scale_y_continuous(labels = scales::percent) +
+    scale_color_manual(values = colors_new) +
+    theme(legend.position = "none") +
+   
+    geom_smooth(method = "lm", se = FALSE, color = "darkgray", fullrange = F, size = 1)
+
+
+
+  return(plot)
+}
+
+# Call the function three times with different dataframes and labels
+scatters_supplemental <- create_scatter_plot(t2_v_merged, "Alteri et al. molnupiravir proportion", "scatters_supplemental.pdf")
+scatters_normal <- create_scatter_plot(long_v_normal, "Ruis et al. BA.1 proportion", "scatters_normal.pdf")
+scatters_supplemental2 <- create_scatter_plot(t1_v_merged, "Donovan-Banfield et al. molnupiravir proportion", "scatters_supplemental2.pdf")
+
+scatters_supplemental + scatters_supplemental2 + scatters_normal + comp + plot_annotation(tag_levels = "A") + plot_layout(ncol = 2)
+
+
+ggsave("supplemental_scatters.pdf")
+```
+
+```{r, fig.width=7, fig.height=4}
+plot_spectrum <- function(data, globalmax = 0, limit = 0.1, extra_axis = FALSE, title = "") {
+  if (!globalmax) {
+    globalmax <- max(data$Number_of_mutations)
+  }
+  my_levels <- sort(unique(paste0(data$context_before, data$context_after)))
+
+  data$level <- factor(paste0(data$context_before, data$context_after), levels = my_levels)
+  data$levelno <- as.numeric(data$level)
+
+  precedings <- data %>%
+    group_by(mutation_type, context_before) %>%
+    summarise(levelno = mean(levelno))
+
+  offset <- 0.05
+
+  facet_style_labels <- data %>%
+    group_by(mutation_type) %>%
+    tally() %>%
+    mutate(x = mean(data$levelno), y = -0.13 * globalmax - offset * globalmax)
+
+
+  p <- ggplot(data, aes(x = levelno, y = `Number_of_mutations`, fill = mutation_type)) +
+    facet_wrap(~mutation_type, nrow = 1, strip.position = "top") +
+    theme_bw() +
+    geom_col() +
+    theme(panel.spacing = unit(0, "lines"), panel.border = element_blank()) +
+    geom_bar(stat = "identity") +
+    theme( # remove the vertical grid lines
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank()
+      # explicitly set the horizontal lines (or they will disappear too)
+      # panel.grid.major.y = element_line( size=.2, color="black" )
+    ) +
+    theme(legend.position = "none") +
+    theme(
+      axis.title.x = element_blank(),
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank()
+    ) +
+    scale_x_continuous(expand = c(0, 0)) +
+    theme(
+      strip.background = element_blank(),
+      strip.text.x = element_blank()
+    ) +
+    scale_fill_manual(values = all_colors) +
+    scale_y_continuous(labels = scales::percent, breaks = c(0, 0.02, 0.04), limits = c(NA, limit), oob = scales::squish) +
+    labs(y = " ", title = title) +
+    theme(plot.title = element_text(margin = margin(t = 0, b = -10), size = 10, hjust = 1)) +
+    geom_hline(yintercept = 0, color = "#222222")
+
+  if (extra_axis) {
+    p <- p + geom_rect(data = data, aes(xmin = levelno - 0.5, xmax = levelno + 0.5, ymin = -0.03 * 1.3 * globalmax - globalmax * offset, ymax = -0.00 * 1.3 * globalmax - globalmax * offset, fill = context_after), alpha = .7) +
+
+      geom_tile(data = precedings, aes(x = levelno, y = -.09 * .7 * globalmax - globalmax * offset, fill = context_before, ), width = 4, height = 0.04 * 1.3 * globalmax, alpha = 0.7) +
+      geom_text(data = precedings, aes(x = levelno, y = -.09 * .7 * globalmax - globalmax * offset, label = context_before), size = 1.4, color = "black") +
+      geom_tile(data = facet_style_labels, aes(label = mutation_type, fill = mutation_type, x = x, y = y), width = 16, height = 0.05 * 1.3 * globalmax, alpha = 0.6) +
+      geom_text(data = facet_style_labels, aes(label = mutation_type, label = mutation_type, x = x, y = y), color = "black", size = 2.1, fontface = "bold")
+  }
+  print(p)
+  return(p)
+}
+
+
+trial2 <- normed %>%
+  filter((treat == "mov" & trial == "2")) %>%
+  mutate(Number_of_mutations = Number_of_mutations / sum(`Number_of_mutations`))
+ba1 <- normed %>%
+  filter((trial == "3")) %>%
+  mutate(Number_of_mutations = Number_of_mutations / sum(`Number_of_mutations`))
+
+long <- normed %>%
+  filter((trial == "4")) %>%
+  mutate(Number_of_mutations = Number_of_mutations / sum(`Number_of_mutations`))
+
+
+p_t2 <- plot_spectrum(trial2, 0.1, 0.065, FALSE, "Known molnupiravir (Alteri et al.)")
+
+
+p_ba1 <- plot_spectrum(ba1, 0.1, 0.055, TRUE, "Typical BA.1 (Ruis et al.)")
+p_long <- plot_spectrum(long, 0.1, 0.065, FALSE, "High G-to-A nodes (this study)")
+
+p_t2
+
+stacked <- (p_ba1 / p_t2 / p_long)
+
+
+plot_grid(p_long + labs(y = "Norm. proportion"), p_t2, p_ba1, (scatters), labels = c("A", "B", "C", "D"), rel_heights = c(.8, 1))
+
+
+
+ggsave("t2vlong.pdf", width = 8, height = 4)
+
+
+
+# plot_grid(p_long +labs(y="Norm. proportion") , p_t2  , p_ba1 , (scatters) , rel_heights = c(.8, 1))
+
+
+
+ggsave("t2vlong-present.pdf", width = 8, height = 4)
+
+ggsave("~/movmanuscript2/Figures2/spectra.pdf", width = 8, height = 4)
+
+
+p_ba1
+
+ggsave("p_ba1.pdf", width = 0.5 * 10, height = 0.5 * 4.5)
+
+p_long
+
+ggsave("p_long.pdf", width = 0.5 * 10, height = 0.5 * 4.5)
+
+p_t2
+ggsave("p_t2.pdf", width = 0.5 * 10, height = 0.5 * 4.5)
+
+
+scatters
+ggsave("scatters_small.pdf", width = 0.5 * 10, height = 0.5 * 4.5)
+```
+
+```{r fig.height=6.5,fig.width=9.5}
+
+toprow <- plot_grid(a, b + labs(caption = "\n\n"), scatter, labels = c("A", "B", "C"), label_size = 12, rel_widths = c(1, 1, 1.5), ncol = 3, align = "v")
+bottomrow <- plot_grid(by_year_plot, country_comp, availability_plot, age, labels = c("D", "E", "F", "G"), label_size = 12, rel_widths = c(0.7, 1.5, 1.3, .7), ncol = 4)
+plot_grid(toprow, bottomrow, ncol = 1)
+ggsave("plot.pdf", width = 9.5, height = 6.5)
+
+
+library(patchwork)
+
+
+layout <- "
+AAABBBBCCCCCCC
+DDEEEEEFFFFFGG
+"
+a + b + scatter + by_year_plot + country_comp + availability_plot + age + plot_layout(design = layout) + plot_annotation(tag_levels = "A")
+
+
+ggsave("patchwork_version.pdf", width = 9.5, height = 6.5)
+ggsave("~/movmanuscript2/Figures2/patchworkcombo.pdf", width = 9.5, height = 6.5)
+```
+
+```{r}
+countries <- c("Australia", "United Kingdom", "Japan", "France")
+proportions_of_long_branches <- ggplot(data_nodes %>% filter(total_muts > 9, total_muts < 21, consensus_country %in% countries, consensus_year %in% c("2022", "2023")), aes(x = total_muts, fill = flagged)) +
+  geom_bar(position = "fill") +
+  facet_wrap(~consensus_country) +
+  theme_bw() +
+  scale_y_continuous(labels = scales::percent, expand = c(0, 0)) +
+  labs(x = "Number of mutations at node", y = "Proportions") +
+  scale_fill_manual(labels = c("Other", "High G-to-A"), values = c("#eeeeee", red)) +
+  scale_x_continuous(expand = c(0, 0), breaks = c(10, 15, 20)) +
+  labs(fill = "") +
+  theme(legend.position = "bottom")
+proportions_of_long_branches
+ggsave("plotter.pdf", width = 5, height = 4)
+```
+
+```{r cache.lazy=FALSE}
+library(Biostrings)
+data("BLOSUM62")
+bl62 <- as.data.frame(as.table(BLOSUM62))
+
+colnames(bl62) <- c("original_aa", "alternative_aa", "bl62_score")
+
+
+all <- inner_join(data_nodes, data_muts %>% right_join(bl62), by = "node_id")
+```
+
+```{r}
+adjustment_factor <- 3.24
+
+annotated =  all  %>%
+  mutate(branch_type = case_when(
+    total_muts >= threshold_branch_length & flagged ~ "Long branch, high G-to-A",
+    total_muts >= threshold_branch_length & !flagged ~ "Long branch, not high G-to-A",
+    TRUE ~ "Short branch"
+  )) 
+
+
+
+dnds_stuff <- all %>% filter(gene=="S") %>%
+  mutate(branch_type = case_when(
+    total_muts >= threshold_branch_length & flagged ~ "Long branch, high G-to-A",
+    total_muts >= threshold_branch_length & !flagged ~ "Long branch, not high G-to-A",
+    TRUE ~ "Short branch"
+  )) %>%
+  group_by(branch_type, is_synonymous) %>%
+  tally() %>%
+  group_by(branch_type) %>%
+  mutate(p = n / sum(n), ratio = n / (sum(n) - n), dnds = ratio / adjustment_factor) %>%
+  rowwise() %>%
+  mutate(confidence_interval = list(binom.test(n, n/p)$conf.int))  %>%
+  mutate(
+         lower = confidence_interval[1],
+         upper = confidence_interval[2])
+
+dnds_stuff
+
+dnds_stuff %>% ggplot(aes(y = p, fill = is_synonymous, x = branch_type)) +
+  geom_col(width = 0.5) +
+  scale_y_continuous(label = scales::percent) +
+  theme_bw() +
+  labs(fill = "Is synonymous", x = "High G-to-A", y = "Proportion")
+
+
+ggsave("plot.png", width = 4, height = 3)
+
+library(gt)
+dnds_stuff = dnds_stuff %>% dplyr::filter(!is_synonymous) %>% mutate(total_n = n/p)
+# Extract the relevant data for "Long branch, high G-to-A"
+long_high <- dnds_stuff %>% 
+  filter(branch_type == "Long branch, high G-to-A", !is_synonymous)
+
+# Extract the relevant data for "Long branch, not high G-to-A"
+long_not_high <- dnds_stuff %>% 
+  filter(branch_type == "Long branch, not high G-to-A", !is_synonymous)
+
+# Extract the relevant data for "Short branch"
+short_branch <- dnds_stuff %>% 
+  filter(branch_type == "Short branch", !is_synonymous)
+
+# Conduct the proportion test between "Long branch, high G-to-A" and "Long branch, not high G-to-A"
+test1 <- prop.test(x = c(long_high$n, long_not_high$n),
+                   n = c(long_high$total_n, long_not_high$total_n),
+                   alternative = "two.sided")
+
+# Conduct the proportion test between "Long branch, high G-to-A" and "Short branch"
+test2 <- prop.test(x = c(long_high$n, short_branch$n),
+                   n = c(long_high$total_n, short_branch$total_n),
+                   alternative = "two.sided")
+
+# Print the results
+print(test1)
+print(test2)
+
+
+```
+
+```{r}
+for_plot <- data_nodes %>%
+  filter(consensus_year %in% c("2022", "2023"), total_muts > 9, total_muts < 20) %>%
+  mutate(new = ifelse(flagged, "High G-to-A", "Other"))
+
+distributions <- ggplot(for_plot, aes(x = total_muts, fill = flagged)) +
+  geom_bar() +
+  facet_wrap(~new, scales = "free_y") +
+  theme_bw() +
+  scale_x_continuous(breaks = c(10, 14, 18)) +
+  scale_fill_manual(values = c("#bbbbbb", red)) +
+  labs(x = "Total mutations", y = "Count") +
+  theme(legend.position = "none")
+distributions
+proportions_of_long_branches + distributions
+```
+
+```{r}
+library(broom)
+countries <- c("Australia", "Japan", "United Kingdom", "USA")
+
+dataset <- data_nodes %>% filter(consensus_year == "2022", total_muts >= threshold_branch_length, total_muts < 21, date_length < 750)
+
+ggplot(dataset, aes(x = total_muts, y = date_length, color = flagged)) +
+  geom_point() +
+  geom_smooth()
+dataset
+
+t.test(data = dataset, date_length ~ flagged)
+
+dataset2 <- dataset %>% filter(consensus_country %in% countries)
+
+dataset3 <- dataset2 %>%
+  group_by(total_muts, flagged, consensus_country) %>%
+  summarize(
+    mean_date_length = mean(date_length),
+    se_date_length = sd(date_length) / sqrt(n()),
+    conf.low = mean_date_length - qt(0.975, df = n() - 1) * se_date_length,
+    conf.high = mean_date_length + qt(0.975, df = n() - 1) * se_date_length
+  )
+
+ggplot(dataset3, aes(x = total_muts, y = mean_date_length, color = flagged)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, position = position_dodge(width = 1)) +
+  facet_wrap(~flagged) +
+  labs(x = "Total Mutations", y = "Mean Date Length", color = "Flagged") +
+  facet_wrap(~consensus_country) +
+  coord_cartesian(ylim = c(0, 200)) +
+  geom_smooth(data = dataset2, aes(y = date_length))
+```
+
+```{r}
+final_df <- tibble()
+
+many_descendants <- data_nodes %>%
+  filter(total_muts > 9, flagged, num_descendants > 1)
+
+# Loop through every single_node in many_descendants
+for (i in 1:nrow(many_descendants)) {
+  single_node <- many_descendants$node_id[i]
+  children <- find_children(parenthood, single_node)
+  children <- children[!grepl("^node_", children)]
+
+
+  # Create a temporary tibble for the current node
+  cluster_df <- tibble(node_id = children, cluster = single_node)
+
+
+  # bind the current tibble with the final one
+  final_df <- bind_rows(final_df, cluster_df)
+}
+
+single_descendants <- data_nodes %>%
+  filter(total_muts > 9, flagged, num_descendants == 1)
+
+single_df <- tibble(node_id = single_descendants$node_id, cluster = single_descendants$node_id)
+
+final_df <- bind_rows(final_df, single_df)
+
+final_df2 <- final_df %>%
+  separate_wider_delim(node_id, delim = "|", names = c("name", "epi", "date"), cols_remove = FALSE, too_few = "align_start") %>%
+  separate_wider_delim(name, delim = "/", names = c("country", "name2", "year"), cols_remove = FALSE, too_few = "align_start", too_many = "drop")
+
+
+final_df2 %>% filter(country == "England")
+
+write_csv(final_df2, "associated.csv")
+```
+
+```{r  eval = FALSE}
+library(ggtree)
+
+format_mutation_counts <- function(node_data) {
+  # Extract mutation count columns
+  mutation_cols <- c("A>C", "A>G", "A>T", "C>A", "C>G", "C>T", "G>A", "G>C", "G>T", "T>A", "T>C", "T>G")
+
+  # Create a named vector of mutation counts
+  mutation_counts <- sapply(mutation_cols, function(x) node_data[[x]])
+  names(mutation_counts) <- mutation_cols
+
+  # Remove zeros
+  mutation_counts <- mutation_counts[mutation_counts > 0]
+
+  # Sort in descending order
+  mutation_counts <- sort(mutation_counts, decreasing = TRUE)
+
+  # Format as a string
+  mutation_str <- paste(names(mutation_counts), mutation_counts, sep = ": ", collapse = ", ")
+  mutation_str <- gsub(">", "\u00adto\u00ad", mutation_str)
+
+  return(mutation_str)
+}
+
+prune_and_plot <- function(node_id, parent, node_data) {
+  mutation_title <- format_mutation_counts(node_data)
+  print(node_id)
+
+  # Create directories if they do not exist
+  if (!dir.exists("data")) {
+    dir.create("data")
+  }
+
+  if (!dir.exists("trees")) {
+    dir.create("trees")
+  }
+
+
+  gotree_command <- paste0("~/Dropbox/new_mov_data/gotree_arm64_darwin subtree -i ~/Dropbox/new_mov2/dist.nwk.gz -n '^", parent, "$' > ", paste0("data/pruned_", node_id, ".nwk"))
+
+  print(gotree_command)
+
+  # Execute the system call
+  system(gotree_command)
+
+  # Read the newick file
+  tree <- read.tree(paste0("data/pruned_", node_id, ".nwk"))
+
+
+  get_node_index <- function(tree, node_name) {
+    for (i in 1:length(tree$node.label)) {
+      if (tree$node.label[i] == node_name) {
+        return(i + ape::Ntip(tree)) # Return the index of the node
+      }
+    }
+    return(NULL) # Return NULL if no node with that name was found
+  }
+
+  node_index <- get_node_index(tree, node_id)
+
+
+  # Plot the tree using ggtree
+  ggtree_plot <- ggtree(tree, aes( # color=node==node_index
+  )) +
+    geom_tiplab(size = 3, aes(label = label)) + # Add tip labels
+    geom_point2(aes(subset = !is.na(num_tips)), color = "#4561de") + # Add points to visualize node locations
+    coord_cartesian(clip = "off") +
+    theme_tree2(plot.margin = margin(6, 290, 6, 6)) +
+    theme(legend.position = "none") + #+scale_color_manual(values = c("TRUE" = "darkblue", "FALSE" = "black"))
+    geom_text(aes(x = branch, label = ifelse(node == node_index, mutation_title, "")),
+      size = 3,
+      vjust = -.4, color = "firebrick"
+    ) #+ggtitle(node_id)
+
+  # Calculate the number of tips
+  num_tips <- ape::Ntip(tree)
+
+  # Calculate a reasonable height for the plot
+  # Adjust this calculation as needed
+  plot_height <- max(1.5, num_tips / 5)
+
+  # Save the plot to a pdf
+  # ggsave(filename = paste0("trees/node_", node_id, ".pdf"), plot = ggtree_plot, height = plot_height, width = 10)
+
+  return(list(ggtree_plot, plot_height))
+}
+
+filtered_nodes <- data_nodes %>%
+  filter(total_muts > 9, flagged, num_descendants > 2) %>%
+  arrange(desc(num_descendants))
+
+filtered_nodes
+
+library(patchwork)
+
+# Step 1
+plots_list <- list()
+heights_list <- c()
+total_height <- 0
+# Introduce plot_number
+plot_number <- 1
+
+# In your loop
+
+pdf("trees/combined_plots.pdf", height = 11.7, width = 8.3) # Create a PDF file
+
+for (i in 1:nrow(filtered_nodes)) {
+  print(i)
+
+  listed <- prune_and_plot(filtered_nodes$node_id[i], get_parent(parenthood, filtered_nodes$node_id[i]), filtered_nodes[i, ])
+
+  ggtree_plot <- listed[[1]]
+  plot_height <- listed[[2]]
+
+  # Check if adding the new plot will exceed the page size
+  if ((total_height + plot_height) >= 16) { # A4 height in inches
+    # Save the existing plots
+    if (length(plots_list) > 0) {
+      combined_plot <- wrap_plots(plots_list) +
+        plot_layout(heights = heights_list / total_height) # Normalize to make it relative
+      print(combined_plot)
+      ggsave(filename = paste0("trees/combined_", plot_number, ".pdf"), plot = combined_plot, height = 11.7, width = 8.3) # A4 dimensions
+
+      plot_number <- plot_number + 1 # Increment plot_number
+    }
+    # Reset the list and total height
+    plots_list <- list()
+    heights_list <- c()
+    total_height <- 0
+  }
+
+
+  if (plot_height < 15 * 5) {
+    # Add the new plot
+    plots_list[[length(plots_list) + 1]] <- ggtree_plot
+    heights_list <- c(heights_list, plot_height)
+    total_height <- total_height + plot_height
+  }
+}
+
+# After the loop, save any remaining plots
+if (length(plots_list) > 0) {
+  combined_plot <- wrap_plots(plots_list) +
+    plot_layout(heights = heights_list / total_height) # Normalize to make it relative
+  ggsave(filename = paste0("trees/combined_", plot_number, ".pdf"), plot = combined_plot, height = 11.7, width = 8.3) # A4 dimensions
+}
+
+dev.off() # Close the PDF device
+
+```
+
+## Mutation effects analysis
+
+
+```{r}
+# Function to read FASTA file and convert to a tibble
+read_fasta_to_tibble <- function(file_path) {
+  # Load the fasta file
+  fasta_data <- readDNAStringSet(file_path)
+
+  # Get sequence from the first (and possibly only) sequence in the fasta file
+  sequence <- as.character(fasta_data[[1]])
+  residues <- strsplit(sequence, "")[[1]]
+  # Create a tibble with residue and index
+  tibble(
+    index = seq_along(residues),
+    residue = residues
+  )
+}
+
+ref_tib <- read_fasta_to_tibble("ref.fa.fasta") %>% mutate(context_before = lag(residue), context_after = lead(residue))
+ref_tib
+```
+
+```{r, fig.width =8,fig.height=6}
+library(gggenes)
+library(tidyverse)
+
+# Read data
+hu1 <- read_tsv("./hu1.tsv")
+
+# Define unique end_points
+end_points <- unique(hu1$end)
+
+# Define a function to generate the vertical line
+generate_vline <- function(end_points) {
+  geom_vline(
+    xintercept = end_points # , linetype = "dashed"
+    , color = "lightgray", size = .2
+  )
+}
+
+# Define common theme
+common_theme <- theme(
+  axis.ticks = element_line(color = "black"),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank()
+)
+
+# Define filtered hu1
+filtered_hu1 <- hu1 %>% filter(feature_type %in% c("CDS", "mat_peptide"))
+
+# hu1_plot
+hu1_plot <- ggplot(filtered_hu1, aes(xmin = start, xmax = end, y = feature_type, fill = feature_type, label = feature_name)) +
+  generate_vline(end_points) +
+  scale_fill_manual(values = c("#fbe4bc", "#dff3f8")) +
+  labs(x = "Nucleotide position", y = "Feature", fill = "Type") +
+  theme_minimal() +
+  geom_gene_arrow() +
+  geom_gene_label() +
+  common_theme +
+  labs(y = "") +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank()) +
+  theme(plot.margin = margin(t = 0, r = 5, l = 5, b = 0)) +
+  xlim(c(0, NA))
+
+
+# Define myset
+myset <- all %>%
+  mutate(blcut = cut(bl62_score, 3)) %>%
+  filter(total_muts > 10, flagged) %>%
+  mutate(mut_type = case_when(
+    (alternative_aa == "*") & (original_aa != "*") ~ "STOP",
+    # bl62_score < -0 ~ "Negative BLOSUM",
+    is_synonymous ~ "Synonymous",
+    TRUE ~ "Non-synonymous (all)"
+  )) %>%
+  filter(mut_type != "STOP")
+
+start_nsp14_codon <- 5926
+end_nsp14_codon <- 6452
+
+
+myset <- myset %>%
+  mutate(
+    is_nsp14 = ifelse(gene == "ORF1ab" & aa_index >= start_nsp14_codon & aa_index <= end_nsp14_codon, TRUE, FALSE),
+    nsp14_index = ifelse(is_nsp14, aa_index - start_nsp14_codon + 1, NA)
+  )
+
+nsp14_muts <- myset %>%
+  filter(is_nsp14, !is_synonymous) %>%
+  group_by(aa_string, nsp14_index) %>%
+  tally() %>%
+  arrange(-n)
+
+ggplot(nsp14_muts %>% filter(n > 4), aes(x = nsp14_index)) +
+  geom_density(bw = 50)
+
+multiple <- myset %>%
+  filter(!is_synonymous) %>%
+  group_by(nt_index) %>%
+  tally() %>%
+  filter(n > 3) %>%
+  mutate(mut_type = "Non-synonymous (site recurrent 4+ times)")
+
+fullmyset <- bind_rows(myset, multiple)
+
+my_colors <- c(
+  "STOP" = "#D55E00",
+  "Synonymous" = "#008837",
+  "Non-synonymous (all)" = "#c2a5cf",
+  "Non-synonymous (site recurrent 4+ times)" = "#7b3294"
+)
+
+density_plot <- ggplot(fullmyset, aes(x = nt_index, color = mut_type, group = mut_type)) +
+  generate_vline(end_points) +
+  geom_density(bw = 500) +
+  theme_minimal() +
+  common_theme +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position = "bottom", # change position to top, bottom, left, right or c(x, y) for specific position
+    legend.direction = "horizontal"
+  ) +
+  geom_hline(yintercept = 0, color = "#444444", size = 0.4) +
+  geom_vline(xintercept = 0, color = "#444444", size = 0.4) +
+  scale_color_manual(values = my_colors) +
+  labs(y = "Density", color = "") +
+  theme(plot.margin = margin(t = 5, r = 5, l = 5, b = 0))
+
+
+density_plot
+
+
+# Legends
+legends <- plot_grid(get_legend(density_plot))
+legends
+
+# Final plot
+final_plot <- plot_grid(density_plot + theme(legend.position = "none"), NULL, hu1_plot + theme(legend.position = "none"), legends, ncol = 1, align = "v", axis = "x", rel_heights = c(7, -.1, 3, 1))
+
+final_plot
+
+ggsave("genome.pdf", width = 10, height = 4)
+
+
+
+myset$nt_mut = paste0(myset$original_nt,myset$nt_index, myset$alternative_nt)
+
+fortable <- myset %>%
+  filter(!is_synonymous) %>%
+  group_by(original_aa, alternative_aa, gene, aa_index, mutation_type,nt_mut) %>%
+  tally() %>%
+  mutate(mut_types = paste0(mutation_type, ":", n)) %>%
+  mutate(nt_muts=paste0(nt_mut, ":", n)) %>%
+  group_by(original_aa, alternative_aa, gene, aa_index) %>%
+  summarise(n = sum(n), types = paste(mut_types, collapse = ", "),nt_muts =  paste(nt_muts, collapse = ", "), ) %>%
+  arrange(-n) %>%
+  filter(gene == "S") %>%
+  mutate(mut_format = paste0("S:", original_aa, aa_index, alternative_aa)) %>%
+  mutate(type = substr(types, 1, 3)) %>%
+  ungroup()
+
+fortable <- fortable %>%
+  mutate(index = as.numeric(str_extract(nt_muts, "\\d+"))) %>% inner_join(ref_tib)
+
+fortable <- fortable %>%
+  mutate(context = paste0(context_before, substr(nt_muts, 1, 1), context_after))
+
+
+library(gridExtra)
+
+table_theme <- ttheme_default(
+  core = list(fg_params = list(cex = 0.6)), # font size for table body
+  colhead = list(fg_params = list(cex = 0.6)), # font size for column headers
+  rowhead = list(fg_params = list(cex = 0.6)) # font size for row headers
+)
+
+
+fortable
+
+
+# Convert the fortable data frame to a table grob
+table_grob <- tableGrob(fortable %>% filter(n > 4) %>% arrange(-n, aa_index) %>% select(mut_format, n, type,context) %>% rename(`AA substitution` = mut_format, `Mut. type` = type, `Context`=context), theme = table_theme, rows = NULL)
+
+fortable %>% filter(n > 4)  %>% group_by(context) %>% tally() %>% arrange(-n)
+
+
+grid.arrange(final_plot, table_grob, ncol = 2, widths = c(3, 1))
+library(ggplotify)
+table_plot <- as.ggplot(table_grob)
+
+# Arrange the plot and table using patchwork
+final_figure <-
+  proportions_of_long_branches + distributions +
+  final_plot + table_plot +
+  plot_layout(ncol = 2, widths = c(3, 1))
+```
+
+```{r  fig.width =8,fig.height=5.15}
+layout <- "
+AABBDD
+CCCCDD
+CCCCDD
+"
+proportions_of_long_branches + distributions +
+  final_plot + table_plot +
+  plot_layout(design = layout) + plot_annotation(tag_levels = "A")
+
+a <- plot_grid(proportions_of_long_branches + theme(legend.position = "none") + labs(y = "Proportion\nhigh G-to-A"), distributions, labels = c("A", "B"))
+b <- plot_grid(a, final_plot, ncol = 1, labels = c("", "C"), rel_heights = c(0.4, 0.6))
+b
+c <- plot_grid(b, table_plot, labels = c("", "D"), rel_widths = c(0.75, 0.25))
+
+c
+ggsave("~/movmanuscript2/Figures2/figtt.pdf", width = 9, height = 5.15)
+
+# Print the final figure
+print(final_figure)
+
+nsp14_muts
+
+nsp14_muts$nsp14_index[1:30]
+
+data_nodes %>%
+  filter(flagged) %>%
+  filter(total_muts >= 10) %>%
+  arrange(-num_descendants)
+```
+
+```{r}
+myset
+```
+
+## Context-specific bayes factors
+
+
+```{r}
+
+mutations_in_highly_mutated_seq = "A543G, G1068A, G1186A, G1264A, T1370C, G1743A, A2497G, C2583T, T2824C, G3287A, C3393T, A3430G, C3604T, G3794A, A4179G, G4300A, G4352A, G4444A, G4474A, A4501G, G4975A, T5117C, G5230A, G5720A, G5861A, C6031T, G6123A, C6198T, G6362A, A6565G, T6661C, G6759A, A6833G, C7051T, C7086T, T7114C, A7558G, C7749T, A7795G, G7934A, C8169T, T8779C, T8875C, T9148C, G9209A, A9409G, C9438T, C9521T, G9575A, A9984G, C10015T, G11198A, C11199T, G11330A, G11605A, T11701C, G11837A, G11944A, A12030G, A12271G, G12442A, C12540T, C12633T, T12703C, C13818T, C14216T, G14622A, C15026T, C15656T, C15783T, C16767T, G16861A, C17481T, T17505C, A17993G, C18201T, C18888T, A19574G, G20062A, T20502C, C21297T, C21588T, G21668A, A21717G, T21752C, A21996G, A22101G, T22189C, T22254C, G22770A, C22783T, A22893G, A23004G, C23013T, G23048A, T23425C, A23734G, T23948C, A24003G, A24062G, C24961T, G24977A, C25066T, G25537A, T25779C, C25872T, C26176T, C26195T, C26335T, G26428A, C26645T, T26819G, G27014A, A27146G, A27386G, G28193A, C28567T, C28674T, G28803A, C28873T, G29081A,  C1471T, C2695T, C4763T, C5192T, C7564T, C8841T, G22898A, C22916A, C24382T, C25889T, C27371T, C28720T"
+
+
+mutations_in_highly_mutated_seq = str_replace_all(mutations_in_highly_mutated_seq, "nt:", "")
+# Split the string by commas, and then extract the initial nucleotide, index, and final nucleotide
+mutations_tibble <- str_split(mutations_in_highly_mutated_seq, ",\\s*") %>%
+  unlist() %>%
+  tibble(mutation = .)  %>%
+  mutate(
+    par = str_extract(mutation, "^[A-Z]"),
+    index = str_extract(mutation, "[0-9]+"),
+    mut = str_extract(mutation, "[A-Z]$")
+  ) %>%
+  select(-mutation) %>% mutate(index=as.numeric(index)) %>% inner_join(ref_tib) 
+
+
+of_interest = mutations_tibble %>% group_by(par,context_before,context_after,mut) %>% tally()%>% mutate(type=paste0(par,mut))
+
+
+unnormalise <- function(df){
+  
+
+inner_join(df,nuc_genome_counts) %>% mutate(spectrum_value = spectrum_value * genome_count) %>% mutate(type=paste0(par,mut))  %>% group_by(par,mut,type) %>% mutate(spectrum_value=spectrum_value/sum(spectrum_value))
+}
+
+model1 = long %>% mutate(type=paste0(par,mut)) %>% rename(spectrum_value = Number_of_mutations) %>% unnormalise()
+model2 = ba1 %>% mutate(type=paste0(par,mut)) %>% rename(spectrum_value = Number_of_mutations)%>% unnormalise()
+
+types_of_interest = c("GA","CT","AG","TC")
+
+library(nnet)
+
+calc_bfs <- function(of_interest){
+
+join_everything = full_join(model1,model2,by=c("par","mut","type","context_before","context_after"), suffix=c("_1","_2")) %>% full_join(of_interest,by=c("par","mut","type","context_before","context_after")) %>% replace_na(list(n=0))
+
+
+
+bfs = c()
+# Step 1: Filter data for each type of interest
+for (mytype in types_of_interest) {
+  
+  filtered = join_everything %>% filter(type==mytype)
+  prob1 = dmultinom(filtered$n, size = sum(filtered$n), prob = filtered$spectrum_value_1, log = F)
+  prob2 = dmultinom(filtered$n, size = sum(filtered$n), prob = filtered$spectrum_value_2, log = F)
+  bf = prob1/prob2
+  bfs[mytype] = bf
+  
+}
+
+bfs
+}
+
+bfs = calc_bfs(of_interest)
+bfs
+prod(bfs)
+```
+
+
+
+
+
+
