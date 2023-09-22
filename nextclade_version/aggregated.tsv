@@ -1,0 +1,19 @@
+Counts by Country (Top 10):
+           Country  Count
+0        Australia    335
+38             USA    193
+18           Japan    110
+40  United Kingdom     82
+17           Italy     30
+22     New Zealand     26
+8          Denmark     22
+36        Thailand     21
+11         Germany     20
+32     South Korea     20
+
+Counts by Year:
+   Year  Count
+3  2023    337
+2  2022    591
+1  2021     62
+0  2020      5
