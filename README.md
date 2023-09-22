@@ -14,6 +14,8 @@ Older scripts
 Used to extract data from MAT for subsequent processing
 ## open_data_version
 A version of the analysis using open data from INSDC for reproducibility
+## nextclade_version
+A version of the analysis using Nextclade for reproducibility of full 15-million sequence results without an UShER tree
 
 _______________
 
