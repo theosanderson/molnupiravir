@@ -13,7 +13,7 @@ Run [Nextclade](https://clades.nextstrain.org/) CLI on the sequences file, and o
 Run step_1_nc_to_spectrum.py on the nextclade.tsv to identify the types of mutations present in the `privateNucMutations.unlabeledSubstitutions` of each sequence. Provide the Hu1 spectrum to allow calculation of contexts.
 
 ```
-python step_1_nc_to_spectrum.py --ref_file ~/ref.fa.fasta --nextclade_file ~/Desktop/nc.tsv.gz | pv -l | xz > out.tsv.gz
+python step_1_nc_to_spectrum.py --ref_file ~/ref.fa.fasta --nextclade_file ~/Desktop/nc.tsv.gz | pv -l | gzip > out.tsv.gz
 ```
 
 ## Step 2:
