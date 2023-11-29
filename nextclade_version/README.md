@@ -12,11 +12,15 @@ Run [Nextclade](https://clades.nextstrain.org/) CLI on the sequences file, and o
 ## Step 1:
 Run step_1_nc_to_spectrum.py on the nextclade.tsv to identify the types of mutations present in the `privateNucMutations.unlabeledSubstitutions` of each sequence. Provide the Hu1 spectrum to allow calculation of contexts.
 
+```
+python step_1_nc_to_spectrum.py --ref_file ~/ref.fa.fasta --nextclade_file ~/Desktop/nc.tsv.gz | pv -l | xz > out.tsv.gz
+```
+
 ## Step 2:
-Run step_2_spectrum_to_molnupiravir.py on the output of step 1 to identify the sequences with molnupiravir-associated mutations. Provide the GISAID metadata file to include date data.
+Run `step_2_process_output.py` on the output of step 1 to identify the sequences with molnupiravir-associated mutations. Provide the GISAID metadata file to include date data.
 
 ## Step 3:
-Run step_3_molnupiravir_to_tree.py on the output of step 2 to count results by country and age.
+Run `step_3_aggregate.py` on the output of step 2 to count results by country and age.
 
 # Example outputs
 We include the `epi_isl_output.txt` and `aggregated.tsv` files for those who don't want to run the scripts. The `epi_isl_output.txt` file contains EPI_ISL ids for potentially molnupiravir-associated sequences identified through this method.
